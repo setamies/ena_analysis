@@ -1,0 +1,24 @@
+# Ignore all files
+*
+
+# Exclude directories not relevant
+!.gitignore
+
+# Allow CSV and JSON files
+!*.csv
+!*.json
+
+# Allow specific Python script
+!utils.py
+
+# Allow specific notebooks
+!exploratory_data_analysis.ipynb
+!ena_analysis_backtest_new.ipynb
+!data.ipynb
+!mda_tests.ipynb
+!backtest.py
+!ENA_Analysis.ipynb
+
+# Include the data folder and its contents
+!data/
+!data/**
