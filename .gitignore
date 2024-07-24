@@ -18,7 +18,10 @@
 !mda_tests.ipynb
 !backtest.py
 !ENA_Analysis.ipynb
+!pendle.ipynb
 
 # Include the data folder and its contents
 !data/
 !data/**
+!pendle_data/
+!pendle_data/**
