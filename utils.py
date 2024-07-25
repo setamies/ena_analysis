@@ -5,6 +5,11 @@ import requests
 from datetime import datetime
 import matplotlib.pyplot as plt
 from typing import List, Dict, Any
+import networkx as nx
+from typing import Dict, List
+import seaborn as sns
+from statsmodels.tsa.stattools import grangercausalitytests
+
 
 def check_stationarity(series: pd.Series, title: str = 'Your Data') -> None:
     """Perform the Augmented Dickey-Fuller test to check stationarity."""
@@ -105,3 +110,121 @@ def create_sequences(data: np.ndarray, sequence_length: int = 1) -> (np.ndarray,
         X.append(data[i:i + sequence_length, :-1])
         y.append(data[i + sequence_length, -1])
     return np.array(X), np.array(y)
+
+def run_granger_causality_tests(df: pd.DataFrame, tokens: list, y_values: list, x_values: list) -> dict:
+    # Dictionary to store results
+    causality_results = {}
+
+    # Loop through each token
+    for token in tokens:
+        token_data = df[df['token'] == token].dropna()
+        causality_results[token] = {}
+
+        # Loop through each y_value
+        for y in y_values:
+            causality_results[token][y] = {}
+
+            # Check each x variable for Granger causality on y
+            for x in x_values:
+                if x != y:  # Avoid testing a variable on itself
+                    test_data = token_data[[y, x]].dropna()  # Ensure data has no NAs
+
+                    # Check for constant values
+                    if test_data[x].nunique() <= 1 or test_data[y].nunique() <= 1:
+                        print(f"Skipping {x} -> {y} due to constant values in data for token {token}.")
+                        continue
+
+                    try:
+                        result = grangercausalitytests(test_data, maxlag=10, verbose=False)  # Run Granger Test
+                        p_values = [result[lag][0]['ssr_ftest'][1] for lag in range(1, 11)]
+                        causality_results[token][y][x] = p_values
+                    except Exception as e:
+                        print(f"Error in testing {x} -> {y} for token {token}: {str(e)}")
+
+    return causality_results
+
+def plot_granger_causality_network(results: Dict[str, Dict[str, Dict[str, List[float]]]],
+                                   significance_level: float = 0.05,
+                                   layout_type: str = 'shell') -> None:
+    """
+    Visualizes a network of Granger causality relationships based on p-values.
+
+    Parameters:
+        results (dict): A nested dictionary containing tokens, variables, and p-values for various lags.
+                        Structure: {token: {dependent_var: {independent_var: [p-values]}}}
+        significance_level (float): The threshold below which a p-value is considered significant.
+        layout_type (str): Type of network layout ('shell', 'spring', 'circular').
+
+    Returns:
+        None: This function plots a network graph.
+    """
+    # Create a directed graph
+    G = nx.DiGraph()
+
+    # Loop over the data to add nodes and edges
+    for token, token_data in results.items():
+        for y_var, causations in token_data.items():
+            for x_var, p_values in causations.items():
+                for lag, p_value in enumerate(p_values, start=1):
+                    if p_value < significance_level:  # Check for significant causality
+                        source = f"{x_var} (Lag {lag})"
+                        target = f"{y_var} ({token})"
+                        G.add_edge(source, target, weight=p_value, label=f"{p_value:.4f}")
+
+    # Choose the layout based on the layout_type parameter
+    if layout_type == 'shell':
+        pos = nx.shell_layout(G)
+    elif layout_type == 'spring':
+        pos = nx.spring_layout(G)
+    elif layout_type == 'circular':
+        pos = nx.circular_layout(G)
+    else:
+        raise ValueError("Unsupported layout type. Choose 'shell', 'spring', or 'circular'.")
+
+    # Draw the graph
+    plt.figure(figsize=(14, 10))
+    nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=5000, alpha=0.6)
+    edges = nx.draw_networkx_edges(G, pos, arrowstyle='->', arrowsize=20, edge_color='gray', node_size=5000)
+    nx.draw_networkx_labels(G, pos, font_size=9, font_weight='bold')
+    edge_labels = nx.get_edge_attributes(G, 'label')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='green')
+
+    plt.title('Network of Granger Causality by Token and Variable')
+    plt.axis('off') 
+    plt.show()
+    
+# Function to create correlation matrix and heatmap
+def create_correlation_heatmap(df: pd.DataFrame, token: str) -> None:
+    corr_matrix = df.corr()
+    
+    # Plotting the heatmap
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt='.2f', linewidths=.5)
+    plt.title(f'Correlation Heatmap for Token: {token}')
+    plt.show()
+
+def get_maturity(month_year: pd.Series) -> str:
+    # Define a mapping from month abbreviations to numbers
+    month_map = {
+        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
+        'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
+        'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+    }
+    
+    # Extract the month and year parts from the input
+    month = month_year.str[:3].str.lower().map(month_map)
+    year = '20' + month_year.str[-2:]
+    
+    # Combine month and year into MM-YYYY format
+    return month + '-' + year
+
+# Function to format the data based on the token type
+def format_data(df: pd.DataFrame, token_type: str) -> pd.DataFrame:
+    if token_type in ['pt', 'yt']:
+        df['token'] = df['source_file'].str[3:-7]
+        df = df.loc[:, ['time', 'volume', 'value', 'maturity', 'token']].copy()
+        df.rename(columns={'value': f'{token_type}_price'}, inplace=True)
+    elif token_type == 'imp_apy':
+        df['token'] = df['source_file'].str[8:-7]
+        df = df.loc[:, ['time', 'underlyingApy', 'impliedApy', 'maturity', 'token']].copy()
+    return df
