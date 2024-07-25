@@ -111,67 +111,69 @@ def create_sequences(data: np.ndarray, sequence_length: int = 1) -> (np.ndarray,
         y.append(data[i + sequence_length, -1])
     return np.array(X), np.array(y)
 
-def run_granger_causality_tests(df: pd.DataFrame, tokens: list, y_values: list, x_values: list) -> dict:
+def run_granger_causality_tests(df: pd.DataFrame, tokens: list, y_values: list, x_values: list, maturities: list) -> dict:
     # Dictionary to store results
     causality_results = {}
 
     # Loop through each token
     for token in tokens:
-        token_data = df[df['token'] == token].dropna()
         causality_results[token] = {}
+        
+        # Loop through each maturity for the token
+        for maturity in maturities:
+            maturity_data = df[(df['token'] == token) & (df['maturity'] == maturity)].dropna()
+            causality_results[token][maturity] = {}
 
-        # Loop through each y_value
-        for y in y_values:
-            causality_results[token][y] = {}
+            # Loop through each y_value
+            for y in y_values:
+                causality_results[token][maturity][y] = {}
 
-            # Check each x variable for Granger causality on y
-            for x in x_values:
-                if x != y:  # Avoid testing a variable on itself
-                    test_data = token_data[[y, x]].dropna()  # Ensure data has no NAs
+                # Check each x variable for Granger causality on y
+                for x in x_values:
+                    if x != y:  # Avoid testing a variable on itself
+                        test_data = maturity_data[[y, x]].dropna()  # Ensure data has no NAs
 
-                    # Check for constant values
-                    if test_data[x].nunique() <= 1 or test_data[y].nunique() <= 1:
-                        print(f"Skipping {x} -> {y} due to constant values in data for token {token}.")
-                        continue
+                        # Check for constant values
+                        if test_data[x].nunique() <= 1 or test_data[y].nunique() <= 1:
+                            print(f"Skipping {x} -> {y} due to constant values in data for token {token} at maturity {maturity}.")
+                            continue
 
-                    try:
-                        result = grangercausalitytests(test_data, maxlag=10, verbose=False)  # Run Granger Test
-                        p_values = [result[lag][0]['ssr_ftest'][1] for lag in range(1, 11)]
-                        causality_results[token][y][x] = p_values
-                    except Exception as e:
-                        print(f"Error in testing {x} -> {y} for token {token}: {str(e)}")
+                        try:
+                            result = grangercausalitytests(test_data, maxlag=10, verbose=False)  # Run Granger Test
+                            p_values = [result[lag][0]['ssr_ftest'][1] for lag in range(1, 11)]
+                            causality_results[token][maturity][y][x] = p_values
+                        except Exception as e:
+                            print(f"Error in testing {x} -> {y} for token {token} at maturity {maturity}: {str(e)}")
 
     return causality_results
 
-def plot_granger_causality_network(results: Dict[str, Dict[str, Dict[str, List[float]]]],
-                                   significance_level: float = 0.05,
-                                   layout_type: str = 'shell') -> None:
+def plot_granger_causality_network(results, significance_level=0.05, layout_type='spring'):
     """
-    Visualizes a network of Granger causality relationships based on p-values.
+    Visualizes a network of Granger causality relationships based on p-values, including maturities.
 
     Parameters:
-        results (dict): A nested dictionary containing tokens, variables, and p-values for various lags.
-                        Structure: {token: {dependent_var: {independent_var: [p-values]}}}
+        results (dict): A nested dictionary containing tokens, maturities, variables, and p-values for various lags.
+                        Structure: {token: {maturity: {dependent_var: {independent_var: [p-values]}}}}
         significance_level (float): The threshold below which a p-value is considered significant.
         layout_type (str): Type of network layout ('shell', 'spring', 'circular').
 
     Returns:
         None: This function plots a network graph.
     """
-    # Create a directed graph
     G = nx.DiGraph()
 
-    # Loop over the data to add nodes and edges
-    for token, token_data in results.items():
-        for y_var, causations in token_data.items():
-            for x_var, p_values in causations.items():
-                for lag, p_value in enumerate(p_values, start=1):
-                    if p_value < significance_level:  # Check for significant causality
-                        source = f"{x_var} (Lag {lag})"
-                        target = f"{y_var} ({token})"
-                        G.add_edge(source, target, weight=p_value, label=f"{p_value:.4f}")
+    for token, maturities in results.items():
+        for maturity, maturity_data in maturities.items():
+            for y_var, causations in maturity_data.items():
+                for x_var, p_values in causations.items():
+                    for lag, p_value in enumerate(p_values, start=1):
+                        if isinstance(p_value, str):
+                            p_value = float(p_value)  # Convert string to float if necessary
+                        if p_value < significance_level:
+                            source = f"{x_var} (Lag {lag})"
+                            target = f"{y_var} ({token}, {maturity})"
+                            G.add_edge(source, target, weight=p_value, label=f"{p_value:.4f}")
 
-    # Choose the layout based on the layout_type parameter
     if layout_type == 'shell':
         pos = nx.shell_layout(G)
     elif layout_type == 'spring':
@@ -181,7 +183,6 @@ def plot_granger_causality_network(results: Dict[str, Dict[str, Dict[str, List[f
     else:
         raise ValueError("Unsupported layout type. Choose 'shell', 'spring', or 'circular'.")
 
-    # Draw the graph
     plt.figure(figsize=(14, 10))
     nx.draw_networkx_nodes(G, pos, node_color='skyblue', node_size=5000, alpha=0.6)
     edges = nx.draw_networkx_edges(G, pos, arrowstyle='->', arrowsize=20, edge_color='gray', node_size=5000)
@@ -189,8 +190,8 @@ def plot_granger_causality_network(results: Dict[str, Dict[str, Dict[str, List[f
     edge_labels = nx.get_edge_attributes(G, 'label')
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, font_color='green')
 
-    plt.title('Network of Granger Causality by Token and Variable')
-    plt.axis('off') 
+    plt.title('Network of Granger Causality by Token, Maturity, and Variable')
+    plt.axis('off')
     plt.show()
     
 # Function to create correlation matrix and heatmap
